@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <string>
 
+
 #ifdef _UNICODE
 typedef  std::wstring tstring;
 #define DBGHELP_TRANSLATE_TCHAR
@@ -13,43 +14,49 @@ typedef  std::string tstring;
 #endif
 
 #include <DbgHelp.h>
+#include "PESeg.h"
 // Link with the dbghelp import library
 #pragma comment(lib, "dbghelp.lib")
 
 
 const TCHAR* FMT_MS_SYMPATH = _T("SRV*%s*https://msdl.microsoft.com/download/symbols");
 
+
+
 static
-bool ReadPEHeader(const TCHAR* fileName, DWORD* pdateStamp, DWORD* pnImageSize)
+bool ReadPEHeader(const TCHAR* fileName, std::list<MyPdbFile>& pdbFiles)
 {
 	HANDLE hExecutable = CreateFile(fileName, GENERIC_READ, FILE_SHARE_READ, 
 									NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (hExecutable == INVALID_HANDLE_VALUE) {
+	if (hExecutable==INVALID_HANDLE_VALUE || !hExecutable) {
 		return false;
 	};
 
 	HANDLE hExecutableMapping = CreateFileMapping(hExecutable, NULL, PAGE_READONLY, 0, 0, NULL);
-	if (hExecutableMapping == 0) {
+	if ( !hExecutableMapping) {
 		CloseHandle(hExecutable);
 		return false;
 	}
 
 	LPVOID pMappedBase = MapViewOfFile(hExecutableMapping, FILE_MAP_READ, 0, 0, 0);
-	if (pMappedBase == 0) {
+	if ( !pMappedBase) {
 		CloseHandle(hExecutableMapping);
 		CloseHandle(hExecutable);
 		return false;
 	}
 
-	PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)pMappedBase;
-	PIMAGE_NT_HEADERS ntHeader = (PIMAGE_NT_HEADERS)((DWORD)dosHeader + (DWORD)dosHeader->e_lfanew);
-	*pdateStamp = ntHeader->FileHeader.TimeDateStamp;
-	*pnImageSize = ntHeader->OptionalHeader.SizeOfImage;
-
+	//PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)pMappedBase;
+	//PIMAGE_NT_HEADERS ntHeader = (PIMAGE_NT_HEADERS)((DWORD)dosHeader + (DWORD)dosHeader->e_lfanew);
+	//*pdateStamp = ntHeader->FileHeader.TimeDateStamp;
+	//*pnImageSize = ntHeader->OptionalHeader.SizeOfImage;
+	
+	GetPDBFiles(pMappedBase, pdbFiles);
+	bool fFound = pdbFiles.size() > 0;
+	
 	///////////////////////////////////////
 	CloseHandle(hExecutableMapping);
 	CloseHandle(hExecutable);
-	return true;
+	return fFound;
 }
 
 static 
@@ -141,26 +148,13 @@ bool DecodeArgs(TCHAR* const argv[], void** ppID, DWORD* pTwo, DWORD* pflag)
 	return true;
 }
 
-static 
-const TCHAR* MakeDownFileName(const TCHAR* filePath) {
-	static TCHAR szFileName[256] = { 0 };
-	const TCHAR* pPos = _tcsrchr(filePath, _T('\\'));
-	pPos = pPos ? pPos + 1 : filePath;
-	_tcscpy_s(szFileName, pPos);
-	//TCHAR* pLast = _tcsrchr(szFileName, _T('.'));
-	//if (pLast) {
-	//	const TCHAR* EXT_PDB = _T(".pdb");
-	//	int nCopy = _tcslen(EXT_PDB) + 1;
-	//	_tcscpy_s(pLast, nCopy, EXT_PDB);
-	//}
-	return szFileName;
-}
 
 
-BOOL CALLBACK SymCallback(HANDLE process,
+BOOL CALLBACK SymCallback(
+	HANDLE /*process*/,
 	ULONG action,
 	ULONG64 data,
-	ULONG64 context)
+	ULONG64 /*context*/)
 {
 	switch (action) {
 		case CBA_EVENT: 
@@ -177,11 +171,11 @@ BOOL CALLBACK SymCallback(HANDLE process,
 
 BOOL CALLBACK SymFindFileInPathCB(
 	_In_ PCTSTR fileName,
-	_In_ PVOID  context
+	_In_ PVOID  /*context*/
 ) 
 {
 	_tprintf_s(_T("get symbol: %s\n"), fileName);
-	return FALSE; //’“µΩ“ª∏ˆæÕ≤ªºÃ–¯¡À
+	return FALSE; //ÊâæÂà∞‰∏Ä‰∏™Â∞±‰∏çÁªßÁª≠‰∫Ü
 }
 
 
@@ -194,7 +188,8 @@ int _tmain(int argc, _Pre_readable_size_(argc) TCHAR* argv[])
 {
 	if (2 != argc && 4 != argc)
 	{
-		_tprintf_s(_T("∑˚∫≈Œƒº˛œ¬‘ÿ∆˜ (by john)\n"));
+		_tprintf_s(_T("pdb downloader (by johnsing)\n"));
+		_tprintf_s(_T("================================\n"));
 		_tprintf_s(_T("Error: insufficient arguments.\n"));
 		_tprintf_s(_T("Usage: %s peName\n"), argv[0]);
 		_tprintf_s(_T("\tExample: %s c:\\Windows\\SysWOW64\\ntdll.dll\n"), argv[0]);
@@ -207,14 +202,12 @@ int _tmain(int argc, _Pre_readable_size_(argc) TCHAR* argv[])
 
 	// Tell dbghelp to print diagnostics to the debugger output.
 	DWORD dwOpt = SymGetOptions();
-	dwOpt = dwOpt | SYMOPT_DEBUG | SYMOPT_SECURE | SYMOPT_CASE_INSENSITIVE
-		          | SYMOPT_FAIL_CRITICAL_ERRORS | SYMOPT_EXACT_SYMBOLS;
+	dwOpt = dwOpt | SYMOPT_DEBUG | SYMOPT_SECURE | SYMOPT_CASE_INSENSITIVE;
 	SymSetOptions(dwOpt);
 
 	// Initialize dbghelp
 	//const HANDLE fakeProcess = reinterpret_cast<const HANDLE>(1);
 	const HANDLE fakeProcess = GetCurrentProcess();
-	//const HANDLE fakeProcess = reinterpret_cast<const HANDLE>(rand());
 
 	TCHAR *symbolPath = NULL;
 	TCHAR msSymPath[1024] = { 0 };
@@ -250,26 +243,41 @@ int _tmain(int argc, _Pre_readable_size_(argc) TCHAR* argv[])
    //thus, passing less than (MAX_PATH+1) is an overrun!
    //The documentation says the buffer needs to be MAX_PATH - hurray for
    //consistency - but better safe than owned.
-   TCHAR filePath[MAX_PATH + 1] = { 0 };
+   TCHAR tarFile[MAX_PATH + 1] = { 0 };
    const TCHAR* fileName = NULL;
-   DWORD dateStamp = 0;
    void* pID = NULL;
    DWORD two = 0;
    DWORD flags = 0;
    
    if (2 == argc) {
+	   static TCHAR szPdb[MAX_PATH + 1] = { 0 };
+	   static GUID gPdb = { 0 };
 	   fileName = argv[1];
-	   if (!ReadPEHeader(fileName, &dateStamp, &two)) {
+
+	   std::list<MyPdbFile> pdbFiles;
+	   if (!ReadPEHeader(fileName, pdbFiles))
+	   {
 		   _tprintf_s(_T("Read file error: %s\n"), fileName);
 		   return -2;
 	   }
-	   fileName = MakeDownFileName(argv[1]);
-	   flags = SSRVOPT_DWORDPTR;
-	   pID = &dateStamp;
-	   _tprintf_s(_T("Looking for PE file %s, DateStamp:%X, ImageSize:%X.\n"), fileName, dateStamp, two);
+	   
+	   //Âè™ËÆ§‰∏∫‰∏Ä‰∏™Êñá‰ª∂Âè™Êúâ‰∏Ä‰∏™Á¨¶Âè∑Êñá‰ª∂
+	   const MyPdbFile& pdbfile = *pdbFiles.begin();
+	   gPdb = pdbfile.gSign;
+	   pID = &gPdb;
+	   two = pdbfile.nAge;
+
+#ifdef _UNICODE
+	   MultiByteToWideChar(CP_ACP, 0, pdbfile.szPdb, -1, szPdb, ARRAYSIZE(szPdb));
+#else
+	   _tcscpy_s(szPdb, pdbfile.szPdb, ARRAYSIZE(szPdb));
+#endif // _UNICODE
+
+	   fileName = szPdb;
+	   flags = SSRVOPT_GUIDPTR;	   
    }
    else if(4==argc) {
-	   fileName = MakeDownFileName(argv[3]);
+	   fileName = argv[3];
 	   if (!DecodeArgs(argv, &pID, &two, &flags)) {
 		   _tprintf_s(_T("Parameters wrong!"));
 		   return -3;
@@ -282,9 +290,9 @@ int _tmain(int argc, _Pre_readable_size_(argc) TCHAR* argv[])
    }
 
    DWORD three = 0;
-   if (SymFindFileInPath(fakeProcess, NULL, fileName, pID, two, three, flags, filePath, SymFindFileInPathCB, NULL))
+   if (SymFindFileInPath(fakeProcess, NULL, fileName, pID, two, three, flags, tarFile, SymFindFileInPathCB, NULL))
    {
-       _tprintf_s(_T("Found file - placed it in %s.\n"), filePath);
+       _tprintf_s(_T("Found file - placed it in %s.\n"), tarFile);
    }
    else
    {

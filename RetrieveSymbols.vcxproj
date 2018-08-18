@@ -61,7 +61,6 @@
       <SDLCheck>true</SDLCheck>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <MultiProcessorCompilation>false</MultiProcessorCompilation>
-      <StringPooling>true</StringPooling>
       <MinimalRebuild>false</MinimalRebuild>
     </ClCompile>
     <Link>
@@ -100,6 +99,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="RetrieveSymbols.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="PESeg.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
