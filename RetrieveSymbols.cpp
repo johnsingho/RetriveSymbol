@@ -1,28 +1,5 @@
-/*
-Copyright 2015 Google Inc. All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
-// Symbol downloading demonstration code.
-// For more information see ReadMe.txt and this blog post:
-// https://randomascii.wordpress.com/2013/03/09/symbols-the-microsoft-way/
-
 #include <cstdio>
 #include <Windows.h>
-
-#define DBGHELP_TRANSLATE_TCHAR
-#include <DbgHelp.h>
 #include <tchar.h>
 #include <cstring>
 #include <cstdlib>
@@ -30,12 +7,15 @@ limitations under the License.
 
 #ifdef _UNICODE
 typedef  std::wstring tstring;
+#define DBGHELP_TRANSLATE_TCHAR
 #else
 typedef  std::string tstring;
 #endif
 
+#include <DbgHelp.h>
 // Link with the dbghelp import library
 #pragma comment(lib, "dbghelp.lib")
+
 
 const TCHAR* FMT_MS_SYMPATH = _T("SRV*%s*https://msdl.microsoft.com/download/symbols");
 
@@ -75,16 +55,16 @@ bool ReadPEHeader(const TCHAR* fileName, DWORD* pdateStamp, DWORD* pnImageSize)
 static 
 bool DecodeArgs(TCHAR* const argv[], void** ppID, DWORD* pTwo, DWORD* pflag)
 {
-	PCTSTR const fileName = argv[1];
+	PCTSTR const fileName = argv[3];
 	tstring gTextArg = argv[1];
 	PCTSTR const dateStampText = argv[1];
 	PCTSTR const ageText = argv[2];
 	PCTSTR const sizeText = argv[2];
 
 	// Parse the GUID and age from the text
-	GUID g = {};
-	DWORD age = 0;
-	DWORD dateStamp = 0;
+	static GUID g = {};
+	static DWORD dateStamp = 0;
+	DWORD age = 0;	
 	DWORD size = 0;
 
 	// Settings for SymFindFileInPath
@@ -118,18 +98,18 @@ bool DecodeArgs(TCHAR* const argv[], void** ppID, DWORD* pTwo, DWORD* pflag)
 			return false;
 		}
 
-		int count = _tscanf_s(gText.substr(0, 8).c_str(), _T("%x"), &g.Data1);
+		int count = _stscanf_s(gText.substr(0, 8).c_str(), _T("%x"), &g.Data1);
 		DWORD temp;
-		count += _tscanf_s(gText.substr(8, 4).c_str(), _T("%x"), &temp);
+		count += _stscanf_s(gText.substr(8, 4).c_str(), _T("%x"), &temp);
 		g.Data2 = (unsigned short)temp;
-		count += _tscanf_s(gText.substr(12, 4).c_str(), _T("%x"), &temp);
+		count += _stscanf_s(gText.substr(12, 4).c_str(), _T("%x"), &temp);
 		g.Data3 = (unsigned short)temp;
 		for (auto i = 0; i < ARRAYSIZE(g.Data4); ++i)
 		{
-			count += _tscanf_s(gText.substr(16 + i * 2, 2).c_str(), _T("%x"), &temp);
+			count += _stscanf_s(gText.substr(16 + i * 2, 2).c_str(), _T("%x"), &temp);
 			g.Data4[i] = (unsigned char)temp;
 		}
-		count += _tscanf_s(ageText, _T("%x"), &age);
+		count += _stscanf_s(ageText, _T("%x"), &age);
 
 		if (count != 12)
 		{
@@ -146,12 +126,12 @@ bool DecodeArgs(TCHAR* const argv[], void** ppID, DWORD* pTwo, DWORD* pflag)
 		if (_tcslen(dateStampText) != 8)
 			_tprintf_s(_T("Warning!!! The datestamp (%s) is not eight characters long. "
 						  "This is usually wrong.\n"), dateStampText);
-		int count = _tscanf_s(dateStampText, _T("%x"), &dateStamp);
-		count += _tscanf_s(sizeText, _T("%x"), &size);
+		int count = _stscanf_s(dateStampText, _T("%x"), &dateStamp);
+		count += _stscanf_s(sizeText, _T("%x"), &size);
 		flags = SSRVOPT_DWORDPTR;
 		id = &dateStamp;
 		two = size;
-		_tprintf_s(_T("Looking for PE file %s %x %x.\n"), fileName, dateStamp, two);
+		_tprintf_s(_T("Looking for PE file %s %X %X.\n"), fileName, dateStamp, two);
 	}
 	
 	*ppID = id;
@@ -161,6 +141,52 @@ bool DecodeArgs(TCHAR* const argv[], void** ppID, DWORD* pTwo, DWORD* pflag)
 	return true;
 }
 
+static 
+const TCHAR* MakeDownFileName(const TCHAR* filePath) {
+	static TCHAR szFileName[256] = { 0 };
+	const TCHAR* pPos = _tcsrchr(filePath, _T('\\'));
+	pPos = pPos ? pPos + 1 : filePath;
+	_tcscpy_s(szFileName, pPos);
+	//TCHAR* pLast = _tcsrchr(szFileName, _T('.'));
+	//if (pLast) {
+	//	const TCHAR* EXT_PDB = _T(".pdb");
+	//	int nCopy = _tcslen(EXT_PDB) + 1;
+	//	_tcscpy_s(pLast, nCopy, EXT_PDB);
+	//}
+	return szFileName;
+}
+
+
+BOOL CALLBACK SymCallback(HANDLE process,
+	ULONG action,
+	ULONG64 data,
+	ULONG64 context)
+{
+	switch (action) {
+		case CBA_EVENT: 
+		{
+			IMAGEHLP_CBA_EVENT *cba_event = reinterpret_cast<IMAGEHLP_CBA_EVENT *>(data);
+			_tprintf(_T("%s"), (PCTSTR)cba_event->desc);
+			return TRUE;
+		}
+		break;
+	};
+
+	return FALSE;
+}
+
+BOOL CALLBACK SymFindFileInPathCB(
+	_In_ PCTSTR fileName,
+	_In_ PVOID  context
+) 
+{
+	_tprintf_s(_T("get symbol: %s\n"), fileName);
+	return FALSE; //找到一个就不继续了
+}
+
+
+/////////////////////////////////////////////////////////////////
+
 // Uncomment this line to test with known-good parameters.
 //#define TESTING
 
@@ -168,6 +194,7 @@ int _tmain(int argc, _Pre_readable_size_(argc) TCHAR* argv[])
 {
 	if (2 != argc && 4 != argc)
 	{
+		_tprintf_s(_T("符号文件下载器 (by john)\n"));
 		_tprintf_s(_T("Error: insufficient arguments.\n"));
 		_tprintf_s(_T("Usage: %s peName\n"), argv[0]);
 		_tprintf_s(_T("\tExample: %s c:\\Windows\\SysWOW64\\ntdll.dll\n"), argv[0]);
@@ -179,73 +206,83 @@ int _tmain(int argc, _Pre_readable_size_(argc) TCHAR* argv[])
 	}
 
 	// Tell dbghelp to print diagnostics to the debugger output.
-	SymSetOptions(SYMOPT_DEBUG);
+	DWORD dwOpt = SymGetOptions();
+	dwOpt = dwOpt | SYMOPT_DEBUG | SYMOPT_SECURE | SYMOPT_CASE_INSENSITIVE
+		          | SYMOPT_FAIL_CRITICAL_ERRORS | SYMOPT_EXACT_SYMBOLS;
+	SymSetOptions(dwOpt);
 
 	// Initialize dbghelp
-	const HANDLE fakeProcess = reinterpret_cast<const HANDLE>(1);
-	//const HANDLE fakeProcess = GetCurrentProcess();
+	//const HANDLE fakeProcess = reinterpret_cast<const HANDLE>(1);
+	const HANDLE fakeProcess = GetCurrentProcess();
 	//const HANDLE fakeProcess = reinterpret_cast<const HANDLE>(rand());
-	const BOOL initResult = SymInitialize(fakeProcess, NULL, FALSE);
-	if (initResult == FALSE)
-	{
-		_tprintf_s(_T("SymInitialize failed!! Error: %u\n"), ::GetLastError());
-		return -1;
-	}
 
 	TCHAR *symbolPath = NULL;
+	TCHAR msSymPath[1024] = { 0 };
 	size_t len = 0;
 	errno_t err = _tdupenv_s(&symbolPath, &len, _T("_NT_SYMBOL_PATH"));
 	if (0 == err && (symbolPath && symbolPath[0])) {
 		_tprintf_s(_T("_NT_SYMBOL_PATH=%s\n"), symbolPath);
+		_tcscpy_s(msSymPath, symbolPath);
 	}
 	else {
-		TCHAR msSymPath[1024];
 		TCHAR szTemp[512] = { 0 };
 		GetModuleFileName(NULL, szTemp, _countof(szTemp));
 		TCHAR* pLastSlash = _tcsrchr(szTemp, _T('\\'));
 		if (pLastSlash) {
 			*pLastSlash = NULL;
 		}
-		//!test
-		_tcscpy_s(szTemp, _T("d:\\temp"));
+
+		//_tcscpy_s(szTemp, _T("d:\\temp"));
 		_stprintf_s(msSymPath, FMT_MS_SYMPATH, szTemp);
 		_tputenv_s(_T("_NT_SYMBOL_PATH"), msSymPath);
 		_tprintf_s(_T("_NT_SYMBOL_PATH is not set. Use default.\n\n"));
 	}
 	free(symbolPath);
 	
+	const BOOL initResult = SymInitialize(fakeProcess, msSymPath, FALSE);
+	if (initResult == FALSE)
+	{
+		_tprintf_s(_T("SymInitialize failed!! Error: %u\n"), ::GetLastError());
+		return -1;
+	}
+
    //SymFindFileInPath is annotated_Out_writes_(MAX_PATH + 1)
    //thus, passing less than (MAX_PATH+1) is an overrun!
    //The documentation says the buffer needs to be MAX_PATH - hurray for
    //consistency - but better safe than owned.
    TCHAR filePath[MAX_PATH + 1] = { 0 };
-   const TCHAR* fileName = argv[1];
+   const TCHAR* fileName = NULL;
    DWORD dateStamp = 0;
    void* pID = NULL;
    DWORD two = 0;
    DWORD flags = 0;
-
-
-
+   
    if (2 == argc) {
+	   fileName = argv[1];
 	   if (!ReadPEHeader(fileName, &dateStamp, &two)) {
 		   _tprintf_s(_T("Read file error: %s\n"), fileName);
 		   return -2;
 	   }
+	   fileName = MakeDownFileName(argv[1]);
 	   flags = SSRVOPT_DWORDPTR;
 	   pID = &dateStamp;
+	   _tprintf_s(_T("Looking for PE file %s, DateStamp:%X, ImageSize:%X.\n"), fileName, dateStamp, two);
    }
-   else {
+   else if(4==argc) {
+	   fileName = MakeDownFileName(argv[3]);
 	   if (!DecodeArgs(argv, &pID, &two, &flags)) {
 		   _tprintf_s(_T("Parameters wrong!"));
 		   return -3;
 	   }
    }
 
-   _tprintf_s(_T("Looking for PE file %s, DateStamp:%X, ImageSize:%X.\n"), fileName, dateStamp, two);
-      
+   if (!SymRegisterCallback64(fakeProcess, SymCallback, NULL))
+   {
+	   _tprintf_s(_T("Failed to SymRegisterCallback64()!"));
+   }
+
    DWORD three = 0;
-   if (SymFindFileInPath(fakeProcess, NULL, fileName, pID, two, three, flags, filePath, NULL, NULL))
+   if (SymFindFileInPath(fakeProcess, NULL, fileName, pID, two, three, flags, filePath, SymFindFileInPathCB, NULL))
    {
        _tprintf_s(_T("Found file - placed it in %s.\n"), filePath);
    }
